@@ -85,6 +85,7 @@ type Conn struct {
 	pingInterval   time.Duration
 	recvTimeout    time.Duration
 	connectTimeout time.Duration
+	allowReadOnly  bool
 
 	creds   []authCreds
 	credsMu sync.Mutex // protects server
@@ -234,6 +235,13 @@ func WithDialer(dialer Dialer) connOption {
 func WithHostProvider(hostProvider HostProvider) connOption {
 	return func(c *Conn) {
 		c.hostProvider = hostProvider
+	}
+}
+
+// Returns a connection option allowing the session to become read-only..
+func AllowReadOnly(b bool) connOption {
+	return func(c *Conn) {
+		c.allowReadOnly = b
 	}
 }
 
@@ -404,7 +412,7 @@ func (c *Conn) loop() {
 			c.logger.Printf("Authentication failed: %s", err)
 			c.conn.Close()
 		case err == nil:
-			c.logger.Printf("Authenticated: id=%d, timeout=%d", c.SessionID(), c.sessionTimeoutMs)
+			c.logger.Printf("Authenticated: id=0x%X, timeout=%d", c.SessionID(), c.sessionTimeoutMs)
 			c.hostProvider.Connected()        // mark success
 			c.closeChan = make(chan struct{}) // channel to tell send loop stop
 			reauthChan := make(chan struct{}) // channel to tell send loop that authdata has been resubmitted
@@ -550,6 +558,7 @@ func (c *Conn) authenticate() error {
 		TimeOut:         c.sessionTimeoutMs,
 		SessionID:       c.SessionID(),
 		Passwd:          c.passwd,
+		ReadOnly:        c.allowReadOnly,
 	})
 	if err != nil {
 		return err
@@ -598,7 +607,13 @@ func (c *Conn) authenticate() error {
 	atomic.StoreInt64(&c.sessionID, r.SessionID)
 	c.setTimeouts(r.TimeOut)
 	c.passwd = r.Passwd
-	c.setState(StateHasSession)
+	if r.ReadOnly {
+		c.setState(StateConnectedReadOnly)
+	} else {
+		// FIXME(msolo) This doesn't make much sense and has no analog in
+		// any other client (Java, C)
+		c.setState(StateHasSession)
+	}
 
 	return nil
 }
@@ -881,18 +896,14 @@ func (c *Conn) Set(path string, data []byte, version int32) (*Stat, error) {
 }
 
 func (c *Conn) Create(path string, data []byte, flags int32, acl []ACL) (string, error) {
-	res := &createResponse{}
-	_, err := c.request(opCreate, &CreateRequest{path, data, acl, flags}, res, nil)
-	return res.Path, err
+	path, _, err := c.Create2(path, data, flags, acl)
+	return path, err
 }
 
 // Return Stat data for the created node.
 func (c *Conn) Create2(path string, data []byte, flags int32, acl []ACL) (string, *Stat, error) {
 	res := &create2Response{}
 	_, err := c.request(opCreate2, &CreateRequest{path, data, acl, flags}, res, nil)
-	if err != nil {
-		return "", nil, err
-	}
 	return res.Path, &res.Stat, err
 }
 
@@ -915,7 +926,7 @@ func (c *Conn) CreateProtectedEphemeralSequential(path string, data []byte, acl 
 
 	var newPath string
 	for i := 0; i < 3; i++ {
-		newPath, err = c.Create(protectedPath, data, FlagEphemeral|FlagSequence, acl)
+		newPath, _, err = c.Create(protectedPath, data, FlagEphemeral|FlagSequence, acl)
 		switch err {
 		case ErrSessionExpired:
 			// No need to search for the node since it can't exist. Just try again.
