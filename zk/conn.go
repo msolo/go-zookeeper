@@ -930,7 +930,7 @@ func (c *Conn) CreateProtectedEphemeralSequential(path string, data []byte, acl 
 
 	var newPath string
 	for i := 0; i < 3; i++ {
-		newPath, _, err = c.Create(protectedPath, data, FlagEphemeral|FlagSequence, acl)
+		newPath, err = c.Create(protectedPath, data, FlagEphemeral|FlagSequence, acl)
 		switch err {
 		case ErrSessionExpired:
 			// No need to search for the node since it can't exist. Just try again.
