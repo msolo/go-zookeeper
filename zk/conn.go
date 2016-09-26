@@ -896,14 +896,18 @@ func (c *Conn) Set(path string, data []byte, version int32) (*Stat, error) {
 }
 
 func (c *Conn) Create(path string, data []byte, flags int32, acl []ACL) (string, error) {
-	path, _, err := c.Create2(path, data, flags, acl)
-	return path, err
+	res := &createResponse{}
+	_, err := c.request(opCreate, &CreateRequest{path, data, acl, flags}, res, nil)
+	return res.Path, err
 }
 
 // Return Stat data for the created node.
 func (c *Conn) Create2(path string, data []byte, flags int32, acl []ACL) (string, *Stat, error) {
 	res := &create2Response{}
 	_, err := c.request(opCreate2, &CreateRequest{path, data, acl, flags}, res, nil)
+	if err != nil {
+		return "", nil, err
+	}
 	return res.Path, &res.Stat, err
 }
 
